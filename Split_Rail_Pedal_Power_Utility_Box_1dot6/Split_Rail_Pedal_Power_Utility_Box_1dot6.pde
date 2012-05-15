@@ -7,6 +7,9 @@
 * Thomas Spellman <thomas@thosmos.com>
 * Jake <jake@spaz.org>
 * Paul@rockthebike.com
+* Copyright: 2012, Rock the Bike (http://rockthebike.com)
+* License: This code is distributed under the GPL license: http://www.gnu.org/licenses/gpl.html
+
 *
 * Notes: 
 * 1.6 - moved version to the top, started protocol of commenting every change in file and in Git commit

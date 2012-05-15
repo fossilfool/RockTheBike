@@ -7,7 +7,11 @@
 * Thomas Spellman <thomas@thosmos.com>
 * Jake <jake@spaz.org>
 * Paul@rockthebike.com
+* Copyright: 2012, Rock the Bike (http://rockthebike.com)
+* License: This code is distributed under the GPL license: http://www.gnu.org/licenses/gpl.html
+
 * 1.6 -- First version with Wattage output display. 
+
 */
 
 char versionStr[] = "Split Rail Pedal Power Utility Box ver. 1.6 . Features include Wattage output display";
