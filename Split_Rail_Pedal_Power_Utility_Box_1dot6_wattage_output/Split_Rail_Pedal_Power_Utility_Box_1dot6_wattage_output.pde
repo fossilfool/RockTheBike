@@ -14,7 +14,7 @@
 
 */
 
-char versionStr[] = "Split Rail Pedal Power Utility Box ver. 1.6 . Features include Wattage output display";
+const char versionStr[] = "Split Rail Pedal Power Utility Box ver. 1.6 . Features include Wattage output display";
 
 /*
 
@@ -73,7 +73,8 @@ GND ------ SerLCD "GND"
 5V ------- SerLCD "VCC"
 */
 
-const int minusRelayPin=12;
+const int minusRelayPin=12;  // NOTE: uses the same pin as twelveVoltPin above? 
+
 //adc = v * 10/110/5 * 1024 == v * 18.618181818181818; // for a 10k and 100k voltage divider into a 10bit (1024) ADC that reads from 0 to 5V
 
 const float voltcoeff = 13.25;  // larger numer interprets as lower voltage 
@@ -162,7 +163,6 @@ void setup() {
   pinMode(voltPin,INPUT);
   pinMode(minusVoltPin, INPUT);
   pinMode(relayPin, OUTPUT);
-//  pinMode(minusRelayPin, OUTPUT);
    pinMode(twelveVoltPin, INPUT);
       pinMode(twelveVoltProtectionPin, INPUT);
  
@@ -174,16 +174,20 @@ void setup() {
       analogWrite(pin[i],0);
     else if(levelType[i] == onoff)
       digitalWrite(pin[i],0);
-       digitalWrite(twelveVoltPin, HIGH);
-       digitalWrite(twelveVoltProtectionPin, HIGH);
   }
+
+ digitalWrite(twelveVoltPin, HIGH);
+ digitalWrite(twelveVoltProtectionPin, HIGH);
   
   //init - Rail LED / pedalometer pins
   pinMode(10,OUTPUT);
   pinMode(11,OUTPUT);
-  pinMode(12, OUTPUT);
+  pinMode(12, OUTPUT);  // NOTE same pin as twelveVoltPint and minusRelayPin?
+  
 //  twelveVoltPedalometerMode=false;
-   digitalWrite(minusRelayPin, LOW);
+
+  //pinMode(minusRelayPin, OUTPUT);
+  //digitalWrite(minusRelayPin, LOW);
 }
 
 boolean levelLock = false;

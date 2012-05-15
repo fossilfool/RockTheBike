@@ -2,7 +2,7 @@
 
 /**** Split-rail Pedalometer
 * Arduino code to run the sLEDgehammer
-* ver. 1.6
+* ver. 1.7
 * Written by:
 * Thomas Spellman <thomas@thosmos.com>
 * Jake <jake@spaz.org>
@@ -13,9 +13,10 @@
 *
 * Notes: 
 * 1.6 - moved version to the top, started protocol of commenting every change in file and in Git commit
+* 1.7 - cleaned up some variables, added NOTE comments about unclear stuff - Thomas
 */
 
-char versionStr[] = "Split Rail Pedal Power Utility Box ver. 1.6";
+char versionStr[] = "Split Rail Pedal Power Utility Box ver. 1.7";
 
 /*
 
@@ -41,7 +42,7 @@ int pin[numPins] = {3, 5, 6, 9};
 //float levelVolt[numLevels] = {21, 24.0, 27.0};
 float levelVolt[numLevels] = {22.0, 23.5, 24.8, 26.7, 27.2};
 int levelMode=0; // 0 = off, 1 = blink, 2 = steady
-int whichPin[]={3, 5, 6, 9, 9}; //Mark, please help! 
+int whichPin[]={3, 5, 6, 9, 9}; //Mark, please help!   NOTE: This can be done wityh pin[] array instead?
 
 // voltages at which to turn on each level
 //float levelVolt[numLevels] = {21, 24.0, 27.0};
@@ -62,7 +63,7 @@ const int ACAmpsPin = A2; // Voltage Sensor Input
 const int plusRailAmpsPin = A1; 
 
 const int relayPin=2;
-const int twelveVoltPin=12;
+const int twelveVoltPin=12;  // NOTE this pin is used multiple times
 const int twelveVoltProtectionPin=8;
 
 /*
@@ -73,7 +74,8 @@ GND ------ SerLCD "GND"
 5V ------- SerLCD "VCC"
 */
 
-const int minusRelayPin=12;
+const int minusRelayPin=12;  // NOTE same pin as twelveVoltPin above
+
 //adc = v * 10/110/5 * 1024 == v * 18.618181818181818; // for a 10k and 100k voltage divider into a 10bit (1024) ADC that reads from 0 to 5V
 
 const float voltcoeff = 13.25;  // larger numer interprets as lower voltage 
@@ -162,9 +164,17 @@ void setup() {
   pinMode(voltPin,INPUT);
   pinMode(minusVoltPin, INPUT);
   pinMode(relayPin, OUTPUT);
-//  pinMode(minusRelayPin, OUTPUT);
-   pinMode(twelveVoltPin, INPUT);
-      pinMode(twelveVoltProtectionPin, INPUT);
+//  pinMode(minusRelayPin, OUTPUT); 
+  pinMode(twelveVoltPin, INPUT);
+  pinMode(twelveVoltProtectionPin, INPUT);
+ digitalWrite(twelveVoltPin, HIGH);
+ digitalWrite(twelveVoltProtectionPin, HIGH);
+   digitalWrite(minusRelayPin, LOW);  // NOTE this was just set HIGH above by twelveVoltPin
+  //init - Rail LED / pedalometer pins
+  pinMode(10,OUTPUT);
+  pinMode(11,OUTPUT);
+  pinMode(12, OUTPUT);  // NOTE all pins should be declared above to prevent confusion
+//  twelveVoltPedalometerMode=false;
  
   // init LED pins
   pinMode(10, OUTPUT);
@@ -174,16 +184,8 @@ void setup() {
       analogWrite(pin[i],0);
     else if(levelType[i] == onoff)
       digitalWrite(pin[i],0);
-       digitalWrite(twelveVoltPin, HIGH);
-       digitalWrite(twelveVoltProtectionPin, HIGH);
   }
   
-  //init - Rail LED / pedalometer pins
-  pinMode(10,OUTPUT);
-  pinMode(11,OUTPUT);
-  pinMode(12, OUTPUT);
-//  twelveVoltPedalometerMode=false;
-   digitalWrite(minusRelayPin, LOW);
 }
 
 boolean levelLock = false;
