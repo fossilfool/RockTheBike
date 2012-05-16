@@ -1,5 +1,3 @@
-//#include <SoftPWM.h>
-
 /**** Split-rail Pedalometer
 * Arduino code to run the sLEDgehammer
 * ver. 1.6
@@ -25,6 +23,8 @@ Do the desired behavior until the next check.
 Repeat. 
 
 */
+#include <Wire.h>
+#include <avr/pgmspace.h>
 #include "ht1632c.h"
 #include "font1.h"
 
@@ -57,9 +57,9 @@ int levelType[numLevels] = {pwm, pwm, pwm, pwm, pwm};
 
 // Arduino pins to be used as inputs to voltage sensor. This shows where to connect the wires! 
 const int voltPin = A0; // Voltage Sensor Input
-const int minusVoltPin = A1; // Voltage Sensor Input
-const int ACAmpsPin = A2; // Voltage Sensor Input
-const int plusRailAmpsPin = A1; 
+const int minusVoltPin = A3; // Voltage Sensor Input
+const int ACAmpsPin = A2; // AC power and all + rail DC devices. 
+const int plusRailAmpsPin = A1; // Plus rail of JBLs only. 
 
 const int relayPin=2;
 const int twelveVoltPin=12;
@@ -78,7 +78,7 @@ const int minusRelayPin=12;  // NOTE: uses the same pin as twelveVoltPin above?
 //adc = v * 10/110/5 * 1024 == v * 18.618181818181818; // for a 10k and 100k voltage divider into a 10bit (1024) ADC that reads from 0 to 5V
 
 const float voltcoeff = 13.25;  // larger numer interprets as lower voltage 
-const float ampcoeff = 7.4; 
+const float ampcoeff = 7.4; //One direct calculation has this at 5.8. Tune. 
 
 //MAXIMUM VOLTAGE TO GIVE LEDS
 //const float maxVoltLEDs = 24 -- always run LEDs in 24V series configuration.
@@ -106,6 +106,9 @@ float ACAmps=0;
 int plusRailAmpsRaw;
 int ACAmpsRaw;
 
+float ACWatts;
+float plusRailWatts;
+float wattage;
 // on/off state of each level (for use in status output)
 int state[numLevels];
 int desiredState[numPins];
@@ -121,10 +124,10 @@ int pwmValue;
 //int pwmvalue24V;
 boolean updatePwm = false;
 
-//Kindermode variables
-boolean twelveVoltPedalometerMode = false;
-boolean twelveVoltProtectionMode = false;
-const float maxVoltTwelveVoltPedalometerMode = 14.5;
+////Kindermode variables
+//boolean twelveVoltPedalometerMode = false;
+//boolean twelveVoltProtectionMode = false;
+//const float maxVoltTwelveVoltPedalometerMode = 14.5;
 
 
 // timing variables for blink. Mark, there are too many of these. 
@@ -152,8 +155,69 @@ int x = 0;
 int y = 0;
 
 
+//About to add a bunch of variables related to the ht1632 display. 
+
+//#include <Wire.h>
+//#include <avr/pgmspace.h>
+//
+//#include "ht1632c.h"
+//#include "font1.h"
+
+// Dual 3216 LED Matrix
+// If you have only one set these to:
+// X_MAX=31
+// Y_MAX=15
+// CHIP_MAX=4
+#define X_MAX 63 // 0 based X
+#define Y_MAX 15 // 0 based Y
+#define CHIP_MAX 4*2 // Number of HT1632C Chips
+                     // 4 each board * 2 boards
+
+// possible values for a pixel;
+#define BLACK  0
+#define GREEN  1
+#define RED    2
+#define ORANGE 3
+
+#define ASSERT(condition) //nothing
+
+/*
+ * Set these constants to the values of the pins connected to the SureElectronics Module
+ */
+ //this new pinout corresponds to the first two-team maker-faire arbduino setup
+static const byte ht1632_cs = 7;    // Chip Select (pin 1)
+static const byte ht1632_clk = 4;  // Clk pin (pin 2)
+static const byte ht1632_wrclk = 12; // Write clock pin (pin 5)
+static const byte ht1632_data = 13;  // Data pin (pin 7)
+// The should also be a common GND (pins .
+// The module with all LEDs like draws about 200mA,
+//  which makes it PROBABLY powerable via Arduino +5V
+
+/*
+ * we keep a copy of the display controller contents so that we can
+ * know which bits are on without having to (slowly) read the device.
+ * Note that we only use the low four bits of the shadow ram, since
+ * we're shadowing 4-bit memory.  This makes things faster, but we
+ * COULD do something with the other half of our bytes !
+ */
+byte ht1632_shadowram[63][CHIP_MAX] = {0};
+/*
+ * we use buffer to put the char fonts
+ */
+char buffer[8][8];
+
+//**************************************************************************************************
+//Function Name: decToBcd
+//Function Feature: Convert normal decimal numbers to binary coded decimal
+//Input Argument: void
+//Output Argument: void
+//**************************************************************************************************
+
+
+
 void setup() {
   Serial.begin(57600);
+    ht1632_initialize();
 
 // Initialize Software PWM
   //SoftPWMBegin();
@@ -182,7 +246,7 @@ void setup() {
   //init - Rail LED / pedalometer pins
   pinMode(10,OUTPUT);
   pinMode(11,OUTPUT);
-  pinMode(12, OUTPUT);  // NOTE same pin as twelveVoltPint and minusRelayPin?
+  pinMode(12,OUTPUT);  // NOTE same pin as twelveVoltPint and minusRelayPin?
   
 //  twelveVoltPedalometerMode=false;
 
@@ -364,6 +428,28 @@ if (plusRailHysteresis==1 && voltage < plusRailComeBackInVoltage){
     printDisplay();
     readCount = 0;
   }
+
+// Adding HT1632 code: 
+
+  char* label;
+
+  if( time % 2000 > 1000 ) {  // display total wattage
+    label = "WATT";
+    wattage = voltage * ACAmps + voltage * plusRailAmps + minusRailVoltage * plusRailAmps; //Assuming - rail amps = + rail amps. 
+    Serial.print("Total wattage is ");
+    Serial.println(wattage);
+  } else {  // display jbl wattage
+    label = "JBL ";
+    wattage = voltage * plusRailAmps + minusRailVoltage * plusRailAmps; //Assuming - rail amps = + rail amps. 
+    Serial.print("JBL wattage is ");
+    Serial.println(wattage);
+  }
+  char buf[]="    ";
+  sprintf(buf, "%4d", (int)wattage);
+  ht1632_draw_strings( label, buf );
+
+  delay(200);
+
   
 }
 
@@ -402,16 +488,20 @@ void setpwmvalue()
 void getCurrents(){
  
  //first two lines are for AC amps 
-ACAmps = analogRead(ACAmpsPin);
+ACAmpsRaw = analogRead(ACAmpsPin);
+//Serial.print("AC Amps Raw: ");
+//Serial.println(ACAmpsRaw);
 // adcvalue = analogRead(ACAmpsPin);
 //  ACAmps = average(adc2amps(adcvalue), ACAmps);
-  
+ACAmps = adc2amps(ACAmpsRaw);  // constant multiplier needed
 
  //next two lines are for Plus Rail amps 
-  adcvalue = analogRead(plusRailAmpsPin);
- plusRailAmps = average(adc2amps(adcvalue), plusRailAmps);
+  plusRailAmpsRaw = analogRead(plusRailAmpsPin);
+//  Serial.print("Plus Rail Amps Raw: ");
+//Serial.println(plusRailAmpsRaw);
+// plusRailAmps = average(adc2amps(adcvalue), plusRailAmps); //Mark we might want to average this after all but commenting it out to get program up and running
 //  minusRailVoltage = average(adc2volts(adcvalue), minusRailVoltage) - 5;
-  
+  plusRailAmps = adc2amps(plusRailAmpsRaw); // constant multiplier needed.
 }
 
 void getVoltages(){
@@ -511,3 +601,375 @@ void printDisplay(){
   Serial.println();
   
 }
+
+
+byte decToBcd(byte val)
+{
+  return ( (val/10*16) + (val%10) );
+}
+
+//**************************************************************************************************
+//Function Name: bcdToDec
+//Function Feature: Convert binary coded decimal to normal decimal numbers
+//Input Argument: void
+//Output Argument: void
+//**************************************************************************************************
+byte bcdToDec(byte val)
+{
+  return ( (val/16*10) + (val%16) );
+}
+
+//**************************************************************************************************
+//Function Name: OutputCLK_Pulse
+//Function Feature: enable CLK_74164 pin to output a clock pulse
+//Input Argument: void
+//Output Argument: void
+//**************************************************************************************************
+void OutputCLK_Pulse(void)	//Output a clock pulse
+{
+  digitalWrite(ht1632_clk, HIGH);
+  digitalWrite(ht1632_clk, LOW);
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_chipselect
+//Function Feature: enable HT1632C
+//Input Argument: select: HT1632C to be selected
+//	If select=0, select none.
+//	If s<0, select all.
+//Output Argument: void
+//**************************************************************************************************
+void ht1632_chipselect(int select)
+{
+  unsigned char tmp = 0;
+  if (select < 0) { // Enable all HT1632C
+    digitalWrite(ht1632_cs, LOW);
+    for (tmp=0; tmp<CHIP_MAX; tmp++) {
+      OutputCLK_Pulse();
+    }
+  } else if(select==0) { //Disable all HT1632Cs
+    digitalWrite(ht1632_cs, HIGH);
+    for(tmp=0; tmp<CHIP_MAX; tmp++) {
+      OutputCLK_Pulse();
+    }
+  } else {
+    digitalWrite(ht1632_cs, HIGH);
+    for(tmp=0; tmp<CHIP_MAX; tmp++) {
+      OutputCLK_Pulse();
+    }
+    digitalWrite(ht1632_cs, LOW);
+    OutputCLK_Pulse();
+    digitalWrite(ht1632_cs, HIGH);
+    tmp = 1;
+    for( ; tmp<select; tmp++) {
+      OutputCLK_Pulse();
+    }
+  }
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_writebits
+//Function Feature: Write bits (up to 8) to h1632 on pins ht1632_data, ht1632_wrclk
+//                  Chip is assumed to already be chip-selected
+//                  Bits are shifted out from MSB to LSB, with the first bit sent
+//                  being (bits & firstbit), shifted till firsbit is zero.
+//Input Argument: bits: bits to send
+//	      firstbit: the first bit to send
+//Output Argument: void
+//**************************************************************************************************
+void ht1632_writebits (byte bits, byte firstbit)
+{
+  DEBUGPRINT(" ");
+  while (firstbit) {
+    DEBUGPRINT((bits&firstbit ? "1" : "0"));
+    digitalWrite(ht1632_wrclk, LOW);
+    if (bits & firstbit) {
+	digitalWrite(ht1632_data, HIGH);
+    }
+    else {
+	digitalWrite(ht1632_data, LOW);
+    }
+    digitalWrite(ht1632_wrclk, HIGH);
+    firstbit >>= 1;
+  }
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_sendcmd
+//Function Feature: Send a command to the ht1632 chip.
+//                  Select 1 0 0 c7 c6 c5 c4 c3 c2 c1 c0 xx Free
+//Input Argument: chipNo: the chip you want to send data
+//               command: consists of a 3-bit "CMD" ID, an 8bit command, and
+//                        one "don't care bit".
+//Output Argument: void
+//**************************************************************************************************
+static void ht1632_sendcmd (byte chipNo, byte command)
+{
+  ht1632_chipselect(chipNo);
+  ht1632_writebits(HT1632_ID_CMD, 1<<2);  // send 3 bits of id: COMMMAND
+  ht1632_writebits(command, 1<<7);  // send the actual command
+  ht1632_writebits(0, 1); 	/* one extra dont-care bit in commands. */
+  ht1632_chipselect(0);
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_senddata
+//Function Feature: send a nibble (4 bits) of data to a particular memory location of the
+//                  ht1632.  The command has 3 bit ID, 7 bits of address, and 4 bits of data.
+//                  Select 1 0 1 A6 A5 A4 A3 A2 A1 A0 D0 D1 D2 D3 Free
+//                  Note that the address is sent MSB first, while the data is sent LSB first!
+//                  This means that somewhere a bit reversal will have to be done to get
+//                  zero-based addressing of words and dots within words.
+//Input Argument: chipNo: the chip you want to send data
+//               address: chip address to write
+//                  data: data to write to chip memory
+//Output Argument: void
+//**************************************************************************************************
+static void ht1632_senddata (byte chipNo, byte address, byte data)
+{
+  ht1632_chipselect(chipNo);
+  ht1632_writebits(HT1632_ID_WR, 1<<2);  // send ID: WRITE to RAM
+  ht1632_writebits(address, 1<<6); // Send address
+  ht1632_writebits(data, 1<<3); // send 4 bits of data
+  ht1632_chipselect(0);
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_clear
+//Function Feature: clear display
+//Input Argument: void
+//Output Argument: void
+//**************************************************************************************************
+void ht1632_clear()
+{
+  char i;
+
+  for (int j=1;j<=CHIP_MAX;j++) {
+    ht1632_chipselect(j);
+    ht1632_writebits(HT1632_ID_WR, 1<<2);  // send ID: WRITE to RAM
+    ht1632_writebits(0, 1<<6); // Send address
+    for (i=0; i<64/2; i++) // Clear entire display
+      ht1632_writebits(0, 1<<7); // send 8 bits of data
+    ht1632_chipselect(0);
+    for (i=0; i<64; i++)
+      ht1632_shadowram[i][j] = 0;
+  }
+}
+
+//**************************************************************************************************
+//Function Name: xyToIndex
+//Function Feature: get the value of x,y
+//Input Argument: x: X coordinate
+//                y: Y coordinate
+//Output Argument: address of xy
+//**************************************************************************************************
+byte xyToIndex(byte x, byte y)
+{
+  byte nChip, addr;
+
+  if (x>=32) {
+    nChip = 3 + x/16 + (y>7?2:0);
+  } else {
+    nChip = 1 + x/16 + (y>7?2:0);
+  }
+
+  x = x % 16;
+  y = y % 8;
+  addr = (x<<1) + (y>>2);
+
+  return addr;
+}
+
+//**************************************************************************************************
+//Function Name: calcBit
+//Function Feature: calculate the bitval of y
+//Input Argument: y: Y coordinate
+//Output Argument: bitval
+//**************************************************************************************************
+#define calcBit(y) (8>>(y&3))
+
+//**************************************************************************************************
+//Function Name: get_pixel
+//Function Feature: get the value of x,y
+//Input Argument: x: X coordinate
+//                y: Y coordinate
+//Output Argument: color setted on x,y coordinates
+//**************************************************************************************************
+int get_pixel(byte x, byte y) {
+  byte addr, bitval, nChip;
+
+  if (x>=32) {
+    nChip = 3 + x/16 + (y>7?2:0);
+  } else {
+    nChip = 1 + x/16 + (y>7?2:0);
+  }
+
+  addr = xyToIndex(x,y);
+  bitval = calcBit(y);
+
+  if ((ht1632_shadowram[addr][nChip-1] & bitval) && (ht1632_shadowram[addr+32][nChip-1] & bitval)) {
+    return ORANGE;
+  } else if (ht1632_shadowram[addr][nChip-1] & bitval) {
+    return GREEN;
+  } else if (ht1632_shadowram[addr+32][nChip-1] & bitval) {
+    return RED;
+  } else {
+    return 0;
+  }
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_plot
+//Function Feature: plot a dot on x,y
+//Input Argument: x: X coordinate
+//                y: Y coordinate
+//            color: BLACK(clean), GREEN, RED, ORANGE
+//Output Argument: void
+//**************************************************************************************************
+void ht1632_plot (byte x, byte y, byte color)
+{
+  byte nChip, addr, bitval;
+
+  if (x<0 || x>X_MAX || y<0 || y>Y_MAX)
+    return;
+
+  if (color != BLACK && color != GREEN && color != RED && color != ORANGE)
+    return;
+
+  if (x>=32) {
+    nChip = 3 + x/16 + (y>7?2:0);
+  } else {
+    nChip = 1 + x/16 + (y>7?2:0);
+  }
+
+  addr = xyToIndex(x,y);
+  bitval = calcBit(y);
+
+  switch (color)
+  {
+    case BLACK:
+      if (get_pixel(x,y) != BLACK) { // compare with memory to only set if pixel is other color
+        // clear the bit in both planes;
+        ht1632_shadowram[addr][nChip-1] &= ~bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+        addr = addr + 32;
+        ht1632_shadowram[addr][nChip-1] &= ~bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+      }
+      break;
+    case GREEN:
+      if (get_pixel(x,y) != GREEN) { // compare with memory to only set if pixel is other color
+        // set the bit in the green plane and clear the bit in the red plane;
+        ht1632_shadowram[addr][nChip-1] |= bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+        addr = addr + 32;
+        ht1632_shadowram[addr][nChip-1] &= ~bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+      }
+      break;
+    case RED:
+      if (get_pixel(x,y) != RED) { // compare with memory to only set if pixel is other color
+        // clear the bit in green plane and set the bit in the red plane;
+        ht1632_shadowram[addr][nChip-1] &= ~bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+        addr = addr + 32;
+        ht1632_shadowram[addr][nChip-1] |= bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+      }
+      break;
+    case ORANGE:
+      if (get_pixel(x,y) != ORANGE) { // compare with memory to only set if pixel is other color
+        // set the bit in both the green and red planes;
+        ht1632_shadowram[addr][nChip-1] |= bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+        addr = addr + 32;
+        ht1632_shadowram[addr][nChip-1] |= bitval;
+        ht1632_senddata(nChip, addr, ht1632_shadowram[addr][nChip-1]);
+      }
+      break;
+  }
+}
+
+//**************************************************************************************************
+//Function Name: set_buffer
+//Function Feature: set buffer variable to char
+//Input Argument: chr: char to set on buffer
+//Output Argument: void
+//**************************************************************************************************
+void set_buffer(char chr){
+  for(int i=0; i<sizeof(chl); i++){
+    if(chl[i] == chr){
+      int pos = i*8;
+      for(int j=0;j<8;j++){
+        memcpy_P(buffer[j], (PGM_P)pgm_read_word(&(CHL[j+pos])), 8);
+      }
+    }
+  }
+}
+
+//**************************************************************************************************
+//Function Name: null_buffer
+//Function Feature: null entire buffer
+//Input Argument: void
+//Output Argument: void
+//**************************************************************************************************
+void null_buffer(){
+  for(int i=0;i<8;i++)
+    for(int j=0; j<8;j++)
+      buffer[i][j] = 0;
+}
+
+//**************************************************************************************************
+//Function Name: ht1632_initialize
+//Function Feature: initialize the display
+//Input Argument: void
+//Output Argument: void
+//**************************************************************************************************
+static void ht1632_initialize()
+{
+  pinMode(ht1632_cs, OUTPUT);
+  digitalWrite(ht1632_cs, HIGH);
+  pinMode(ht1632_wrclk, OUTPUT);
+  pinMode(ht1632_data, OUTPUT);
+  pinMode(ht1632_clk, OUTPUT);
+  for (int i=1; i<=CHIP_MAX; i++) {
+    ht1632_sendcmd(i, HT1632_CMD_SYSDIS); // Disable system
+    ht1632_sendcmd(i, HT1632_CMD_COMS00); // 16*32, PMOS drivers
+    ht1632_sendcmd(i, HT1632_CMD_MSTMD);  // MASTER MODE
+    ht1632_sendcmd(i, HT1632_CMD_SYSON);  // System on
+    ht1632_sendcmd(i, HT1632_CMD_LEDON);  // LEDs on 
+  }
+  ht1632_clear(); // Clear the display
+}
+
+void ht1632_draw_strings( char* STRING1, char* STRING2 )
+{
+  int x,i,j;
+  for(x=1;x<5;x++) {
+    null_buffer();
+    for(i=0;i<8;i++){
+      for(j=0;j<8;j++){
+        set_buffer(STRING1[x-1]);
+        if (~buffer[i][j] & (1<<0)) {
+          ht1632_plot(j+(8*(x-1))-1,i,GREEN);
+        } else {
+          ht1632_plot(j+(8*(x-1))-1,i,BLACK);
+        }
+      }
+    }
+  }
+  for(x=1;x<5;x++) {
+    null_buffer();
+    for(i=0;i<8;i++){
+      for(j=0;j<8;j++){
+        set_buffer(STRING2[x-1]);
+        if (~buffer[i][j] & (1<<0)) {
+          ht1632_plot(j+(8*(x-1))-1,i+8,GREEN);
+        } else {
+          ht1632_plot(j+(8*(x-1))-1,i+8,BLACK);
+        }
+      }
+    }
+  }
+}
+
