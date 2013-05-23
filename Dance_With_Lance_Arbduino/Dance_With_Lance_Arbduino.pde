@@ -311,6 +311,13 @@ float adc2volts(float adc){
   return adc * (1 / voltcoeff); // 55 / 1024 = 0.0537109375;
 }
 
+// amp sensor conversion factors
+// 0A == 512 adc == 1.65pV // current sensor offset
+// pV/A = .04 pV/A (@5V) * 3.3V/5V = .0264 pV/A (@3.3V) // sensor sensitivity (pV = adc input pin volts) 
+// adc/pV = 1024 adc / 3.3 pV = 310.3030303030303 adc/pV  // adc per pinVolt
+// adc/A = 310.3030303030303 adc/pV * 0.0264 pV/A = 8.192 adc/A
+// A/adc = 1 A / 8.192 adc = 0.1220703125 A/adc
+
 float adc2amps(float adc){
     // A/adc = 0.1220703125 A/adc
   return (adc - 512) * 0.1220703125;
