@@ -1,7 +1,5 @@
-//#include <SoftPWM.h>
-
 /**** Split-rail Pedalometer
-* Arduino code to run the sLEDgehammer
+* Arduino code to run the Dance with Lance Arbduino
 * ver. 1.9
 * Written by:
 * Thomas Spellman <thomas@thosmos.com>
@@ -12,98 +10,92 @@
 * 1.6 - moved version to the top, started protocol of commenting every change in file and in Git commit
 * 1.7 - jake 6-21-2012 disable minusalert until minus rail is pedaled at least once (minusAlertEnable and startupMinusVoltage)
 * 1.8 -- FF added annoying light sequence for when relay fails or customer bypasses protection circuitry.+
-* 1.9 - TS - cleaned up a bit, added state constants, turn off lowest 2 levels when level 3 and above
+* 1.9 - TS => cleaned up a bit, added state constants, turn off lowest 2 levels when level 3 and above
+* 1.10 - TS => cleaned up levels / pins variables, changed to a "LEDs" naming scheme
 * Australia - changed pin numbers to match specific Arbduino setup
 */
 
-char versionStr[] = "AC Power Pedal Power Utility Box ver. 1.9";
+char versionStr[] = "AC Power Pedal Power Utility Box ver. 1.10";
 
 /*
 
 Check the system voltage. 
-Use a double array to check desired behavior for current voltage.
+Establish desired LED behavior for current voltage.
 Do the desired behavior until the next check.
 
 Repeat. 
 
 */
 
+// GLOBAL VARIABLES
+const int AVG_CYCLES = 50; // average measured voltage over this many samples
+const int DISPLAY_INTERVAL_MS = 500; // when auto-display is on, display every this many milli-seconds
+const int BLINK_PERIOD = 600;
+const int FAST_BLINK_PERIOD = 150;
+const int LED_UPDATE_INTERVAL = 500;
+
+// STATE CONSTANTS
 const int STATE_OFF = 0;
 const int STATE_BLINK = 1;
 const int STATE_BLINKFAST = 3;
 const int STATE_ON = 2;
 
-const int pwm = 0;
-const int onoff = 1;
+// PINS
+const int relayPin = 13; // relay cutoff output pin
+const int voltPin = A0; // Voltage Sensor Pin
+const int ampsPin = A1; // Current Sensor Pin
+const int numLeds = 7; // Number of LED outputs.
+int ledPins[numLeds] = {2, 3, 4, 5, 6, 7, 8}; 
+// levels at which each LED turns on (not including special states)
+float ledLevels[numLeds] = {24.0, 28.0, 32.0, 36.0, 40.0, 44.0, 48.0};
+// current active level
+int ledLevel = -1;
+// on/off/blink/fastblink state of each led 
+int ledState[numLeds] = {STATE_OFF};
 
-// PIN VARIABLES
-const int numPins = 7; // Number of active Arduino Pins for + rail team.
-const int relayPin = 13;
-const int voltPin = A0; // Voltage Sensor Input
+// SPECIAL STATE 
+const float MAX_VOLTS = 50.0;  // 
+const float RECOVERY_VOLTS = 40.0;
+int relayState = STATE_OFF;
 
-int pin[numPins] = {2, 3, 4, 5, 6, 7, 8}; // specific to Australia unit
+const float DANGER_VOLTS = 52.0;
+int dangerState = STATE_OFF;
 
-// LEVEL VARIABLES - there can be more levels than there are pins
-const int numLevels = 8;
+int blinkState = 0;
+int fastBlinkState = 0;
 
-// voltages at which to turn on each level
-float levelVolt[numLevels] = {24.0, 28, 32, 36, 40, 44, 48, 50};
-
-// output pins for each output level
-int levelPin[numLevels] = {2, 3, 4, 5, 6, 7, 8, 8}; //Mark, please help! 
 
 
 const float voltcoeff = 13.25;  // larger numer interprets as lower voltage 
-const float ampcoeff = 7.4; 
+//const float ampcoeff = 7.4; // see adc2amps()
 
-
-//MAXIMUM VOLTAGE TO GIVE LEDS
-
-const float maxVoltLEDs = 21.0; //LED
-const float maxVoltPlusRail = 50;  // 
-const float dangerVoltPlusRail = 52.0;
-
-
-//Hysteresis variables
-const float plusRailComeBackInVoltage = 40;
-int plusRailHysteresis=0;
-int dangerVoltageState=0;
 
 // vars to store temp values
-int adcvalue = 0;
 
 //Voltage related variables. 
-float voltage = 0;
+int voltsAdc = 0;
+float voltsAdcAvg = 0;
+float volts = 0;
 
 //Current related variables
-float plusRailAmps=0;
-float ACAmps=0; 
-int plusRailAmpsRaw;
-int ACAmpsRaw;
+int ampsAdc = 0;
+float ampsAdcAvg = 0;
+float amps = 0;
 
-// on/off state of each level (for use in status output)
-int state[numLevels];
-int desiredState[numLevels];
+float watts = 0;
 
-const int AVG_CYCLES = 50; // average measured voltage over this many samples
-const int DISPLAY_INTERVAL_MS = 500; // when auto-display is on, display every this many milli-seconds
-const int BLINK_PERIOD = 600;
-const int FAST_BLINK_PERIOD = 150;
 
 int readCount = 0; // for determining how many sample cycle occur per display interval
 
 
-// timing variables for blink. Mark, there are too many of these. 
-int blinkState=0;
-int fastBlinkState=0;
+// timing variables for various processes: led updates, print, blink, etc 
 unsigned long time = 0;
-unsigned long lastFastBlinkTime = 0;
-unsigned long lastBlinkTime = 0;
+unsigned long timeFastBlink = 0;
+unsigned long timeBlink = 0;
 unsigned long timeRead = 0;
 unsigned long timeDisplay = 0;
+unsigned long timeLeds = 0;
 
-// current display level
-int level = -1;
 
 // var for looping through arrays
 int i = 0;
@@ -117,185 +109,171 @@ void setup() {
   Serial.println(versionStr);
   
   pinMode(voltPin,INPUT);
+  pinMode(ampsPin,INPUT);
+  
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin,LOW);
  
   // init LED pins
-  for(i = 0; i < numPins; i++) {
-    pinMode(pin[i],OUTPUT);
-    if(pinType[i] == pwm)
-      analogWrite(pin[i],0);
-    else if(pinType[i] == onoff)
-      digitalWrite(pin[i],0);
+  for(i = 0; i < numLeds; i++) {
+    pinMode(ledPins[i],OUTPUT);
+    digitalWrite(ledPins[i],LOW);
   }
-
-   getVoltages();
 }
 
-boolean levelLock = false;
-int senseLevel = -1;
+//int senseLevel = -1;
 
 void loop() {
 
-  getVoltages();
-
-  getCurrents();
-  setpwmvalue();
+  getVolts();
+  calcVolts();
+  doSafety();
+  
+  getAmps();
+  
   readCount++;
+
+  time = millis();
+
+  doBlink();
   
-  
- //First deal with the blink  
-
-          time = millis();
-          if (((time - lastBlinkTime) > BLINK_PERIOD) && blinkState==1){
-               //                  Serial.println("I just turned pwm to 0.");
-             //     pwmValue=0;
-                  blinkState=0;
-                       //   analogWrite(levelPin[i], pwmValue);
-                  lastBlinkTime=time;
-                } else if (((time - lastBlinkTime) > BLINK_PERIOD) && blinkState==0){
-                 //   Serial.println("I just turned blinkstate to 1.");
-                   blinkState=1; 
-                   lastBlinkTime=time;
-                }
-                
-
-          if (((time - lastFastBlinkTime) > FAST_BLINK_PERIOD) && fastBlinkState==1){
-               //                  Serial.println("I just turned pwm to 0.");
-             //     pwmValue=0;
-                  fastBlinkState=0;
-                       //   analogWrite(levelPin[i], pwmValue);
-                  lastFastBlinkTime=time;
-                } else if (((time - lastFastBlinkTime) > FAST_BLINK_PERIOD) && fastBlinkState==0){
-                 //   Serial.println("I just turned blinkstate to 1.");
-                    fastBlinkState=1; 
-                   lastFastBlinkTime=time;
-                }  
-
- 
-if (voltage > maxVoltPlusRail){
-
-   digitalWrite(relayPin, HIGH); 
-   plusRailHysteresis=1;
+  if(time - timeLeds > LED_UPDATE_INTERVAL){
+    doLeds();
+    timeLeds = time;
   }
-  
-if (plusRailHysteresis==1 && voltage < plusRailComeBackInVoltage){
- digitalWrite(relayPin, LOW);
- plusRailHysteresis=0;
- } 
-
-if (voltage > dangerVoltPlusRail){
-   dangerVoltageState=1;
-  } else { 
-    dangerVoltageState=0;
-  } 
-  
-    //Set the desired lighting states. 
-      
-      senseLevel = -1;
-
-      for(i = 0; i < numLevels; i++) {
-        if(voltage >= levelVolt[i]){
-          senseLevel = i;
-          desiredState[i]=STATE_ON;
-        } else desiredState[i]=STATE_OFF;
-      }
-
-      // if voltage is below the lowest level, blink the lowest level
-      if (voltage < levelVolt[0]){
-        senseLevel=0;
-        desiredState[0]=STATE_BLINK;
-      } 
-      
-      // turn off first 2 levels if voltage is above 3rd level
-      if(voltage > levelVolt[2]){
-        desiredState[0] = STATE_OFF;
-        desiredState[1] = STATE_OFF;
-      }
-
-     if (dangerVoltageState){
-        for(i = 0; i < numLevels; i++) {
-          desiredState[i] = STATE_BLINKFAST;
-        }
-     }    
-      
-      level=senseLevel;
-      
-      // if at the top level, blink it fast
-      if (level == (numLevels-1)){
-        desiredState[level-1] = STATE_BLINKFAST; //workaround
-      }
-      
-   
-    
-    // Do the desired states. 
-    // loop through each led and turn on/off or adjust PWM
-
-     
-                
-    for(i = 0; i < numLevels; i++) {
-
-     // if(pinType[i]==pwm) {
-      
-        if(desiredState[i]==STATE_ON){
-          digitalWrite(levelPin[i], HIGH);
-         
-          state[i] = STATE_ON;}
-        else if (desiredState[i]==STATE_OFF){
-          digitalWrite(levelPin[i], LOW);
-          state[i] = STATE_OFF;}
-        else if (desiredState[i]==STATE_BLINK && blinkState==1){
-         digitalWrite(levelPin[i], HIGH);
-         state[i] = STATE_BLINK;}
-        else if (desiredState[i]==STATE_BLINK && blinkState==0){
-         digitalWrite(levelPin[i], LOW);
-         state[i] = STATE_BLINK;}
-        else if (desiredState[i]==STATE_BLINKFAST && fastBlinkState==1){
-         digitalWrite(levelPin[i], HIGH);
-         state[i] = STATE_BLINK;}
-        else if (desiredState[i]==STATE_BLINKFAST && fastBlinkState==0){
-         digitalWrite(levelPin[i], LOW);
-         state[i] = STATE_BLINK; 
-         
-      }
-    //} 
-    } //end for
     
     //Now show the - Team how hard to pedal. 
     
   if(time - timeDisplay > DISPLAY_INTERVAL_MS){
     timeDisplay = time;
-    printDisplay();
+    //printDisplay();
+    printWatts();
     readCount = 0;
   }
   
 }
 
-void getCurrents(){
- 
-
- plusRailAmps = average(adc2amps(adcvalue), plusRailAmps);
- 
-}
-
-void getVoltages(){
- 
- //first two lines are for + rail
-  adcvalue = analogRead(voltPin);
-  voltage = average(adc2volts(adcvalue), voltage);
+void doSafety() {
+   if (volts > MAX_VOLTS){
+     digitalWrite(relayPin, HIGH); 
+     relayState = STATE_ON;
+  }
+    
+  if (relayState == STATE_ON && volts < RECOVERY_VOLTS){
+     digitalWrite(relayPin, LOW);
+     relayState = STATE_OFF;
+  } 
   
+  if (volts > DANGER_VOLTS){
+     dangerState = STATE_ON;
+  } else { 
+     dangerState = STATE_OFF;
+  }
 }
 
-//Future simplification / generalization
-void protectUltracap(int whichRail){
+void doBlink(){
 
-  // Turn OFF the relay to protect either the minus or the plus rail 
+    if (((time - timeBlink) > BLINK_PERIOD) && blinkState == 1){
+            blinkState = 0;
+            timeBlink = time;
+          } else if (((time - timeBlink) > BLINK_PERIOD) && blinkState == 0){
+             blinkState = 1; 
+             timeBlink = time;
+          }
+          
+
+    if (((time - timeFastBlink) > FAST_BLINK_PERIOD) && fastBlinkState == 1){
+            fastBlinkState = 0;
+            timeFastBlink = time;
+          } else if (((time - timeFastBlink) > FAST_BLINK_PERIOD) && fastBlinkState == 0){
+              fastBlinkState = 1; 
+             timeFastBlink = time;
+          }  
+
+}
+
+void doLeds(){
   
+  // Set the desired lighting states. 
+      
+  ledLevel = -1;
+
+  for(i = 0; i < numLeds; i++) {
+    if(volts >= ledLevels[i]){
+      ledLevel = i;
+      ledState[i]=STATE_ON;
+    } 
+    else 
+      ledState[i]=STATE_OFF;
+  }
+
+  // if voltage is below the lowest level, blink the lowest level
+  if (volts < ledLevels[0]){
+    ledLevel=0;
+    ledState[0]=STATE_BLINK;
+  } 
+  
+  // turn off first 2 levels if voltage is above 3rd level
+  if(volts > ledLevels[2]){
+    ledState[0] = STATE_OFF;
+    ledState[1] = STATE_OFF;
+  }
+
+  if (dangerState){
+    for(i = 0; i < numLeds; i++) {
+      ledState[i] = STATE_BLINKFAST;
+    }
+  }    
+  
+  // if at the top level, blink it fast
+  if (ledLevel == (numLeds-1)){
+    ledState[ledLevel-1] = STATE_BLINKFAST; 
+  }
+      
+    // Do the desired states. 
+    // loop through each led and turn on/off or adjust PWM
+                
+  for(i = 0; i < numLeds; i++) {
+    if(ledState[i]==STATE_ON){
+      digitalWrite(ledPins[i], HIGH);
+    }
+    else if (ledState[i]==STATE_OFF){
+      digitalWrite(ledPins[i], LOW);
+    }
+    else if (ledState[i]==STATE_BLINK && blinkState==1){
+     digitalWrite(ledPins[i], HIGH);
+    }
+    else if (ledState[i]==STATE_BLINK && blinkState==0){
+     digitalWrite(ledPins[i], LOW);
+    }
+    else if (ledState[i]==STATE_BLINKFAST && fastBlinkState==1){
+     digitalWrite(ledPins[i], HIGH);
+    }
+    else if (ledState[i]==STATE_BLINKFAST && fastBlinkState==0){
+     digitalWrite(ledPins[i], LOW);
+    }
+  }
+  
+} // END doLeds()
+
+
+int ampsCompensation = 0;
+void getAmps(){
+  ampsAdc = analogRead(ampsPin);
+  ampsAdc = ampsAdc + ampsCompensation;
+  ampsAdcAvg = average(ampsAdc, ampsAdcAvg);
+}
+void calcAmps(){
+    amps = adc2amps(ampsAdcAvg);
 }
 
-//Future simplification / generalization
-void restoreUltracapAfterHysteresis(){
-  // Turn ON the relay for normal operation
+
+void getVolts(){
+  voltsAdc = analogRead(voltPin);
+  voltsAdcAvg = average(voltsAdc, voltsAdcAvg);
+}
+void calcVolts(){
+    volts = adc2volts(voltsAdcAvg);
 }
 
 float average(float val, float avg){
@@ -334,26 +312,38 @@ float adc2volts(float adc){
 }
 
 float adc2amps(float adc){
-  
-  return adc * (1 / ampcoeff); 
+    // A/adc = 0.1220703125 A/adc
+  return (adc - 512) * 0.1220703125;
+  //return adc * (1 / ampcoeff); 
 }
 
-
-void printDisplay(){
-  Serial.print("volts: ");
-  Serial.print(voltage);
-    Serial.print(", AC Amps: ");
-  Serial.print(ACAmps);
-
-  Serial.print(", Levels ");
-  for(i = 0; i < numLevels; i++) {
-    Serial.print(i);
-    Serial.print(": ");
-    Serial.print(state[i]);
-    Serial.print(", ");
-  }
-  
-  Serial.println("");
-  Serial.println();
-  
+void calcWatts(){
+  calcAmps();
+  calcVolts();
+  watts = volts * amps;
 }
+
+void printWatts(){
+  calcWatts();
+  Serial.print("w");
+  Serial.println(watts); 
+}
+
+//void printDisplay(){
+//  Serial.print("volts: ");
+//  Serial.print(voltage);
+//    Serial.print(", AC Amps: ");
+//  Serial.print(plusRailAmps);
+//
+//  Serial.print(", Levels ");
+//  for(i = 0; i < numLevels; i++) {
+//    Serial.print(i);
+//    Serial.print(": ");
+//    Serial.print(state[i]);
+//    Serial.print(", ");
+//  }
+//  
+//  Serial.println("");
+//  Serial.println();
+//  
+//}
